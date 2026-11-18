@@ -146,8 +146,22 @@ Seed the example FAQ if you want sample data:
 migrations and the owner seed, then the `app` service starts on port 3000 and a
 small `cron` service calls the retention job daily.
 
+**GitHub Actions** (in `.github/workflows/`):
+
+| Workflow | Runs on | Does | Needs |
+|---|---|---|---|
+| `ci.yml` | every push and PR | type-check, unit tests, build, Playwright, n8n JSON check | nothing |
+| `deploy-console.yml` | push to `main` | builds the Docker image and pushes `ghcr.io/aryebleich/n8n:latest` (and `:sha-…`); runs `npm run migrate` (+ owner seed); deploys to Vercel production | GHCR: nothing. Migrations: secrets `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` (optional `OWNER_EMAIL`, `OWNER_PASSWORD`). Vercel: `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` |
+| `deploy-n8n.yml` | changes in `n8n/workflows/` | imports/updates both workflows into n8n, keeps credentials and CONFIG, links the error workflow, activates | secrets `N8N_API_URL`, `N8N_API_KEY` (optional `N8N_CONFIG_JSON`) |
+| `pages.yml` | changes in `n8n/chat-widget/` | publishes the widget and demo to GitHub Pages | Pages source set to *GitHub Actions* |
+
+Jobs whose secrets are missing are skipped with a note in the run summary, so
+the repository builds green before anything is configured. To run the published
+image anywhere: `docker run -p 3000:3000 --env-file .env ghcr.io/aryebleich/n8n:latest`
+(run migrations first with `npm run migrate`).
+
 **Vercel:** import the repository, add the variables from `.env.example`, and
-deploy. `vercel.json` sets the install command (npm 11), function durations and
+deploy (or let `deploy-console.yml` do it with the three Vercel secrets). `vercel.json` sets the install command (npm 11), function durations and
 a daily cron for `/api/cron/retention` (set `CRON_SECRET`). Run
 `npm run migrate` and `npm run seed:owner` once from your machine against the
 same Turso database.

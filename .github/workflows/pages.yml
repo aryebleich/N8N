@@ -1,0 +1,55 @@
+name: Deploy chat widget to GitHub Pages
+
+# Publishes n8n/chat-widget so the widget is served at both
+#   https://<user>.github.io/<repo>/widget.js                (short URL)
+#   https://<user>.github.io/<repo>/chat-widget/widget.js    (same URL as before the move)
+# Requires Settings → Pages → Source: "GitHub Actions" (the workflow tries to enable it).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'n8n/chat-widget/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site/chat-widget
+          cp n8n/chat-widget/index.html n8n/chat-widget/widget.js _site/
+          cp n8n/chat-widget/index.html n8n/chat-widget/widget.js _site/chat-widget/
+          touch _site/.nojekyll
+          ls -R _site
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

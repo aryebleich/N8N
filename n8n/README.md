@@ -209,7 +209,8 @@ then uses the LIKE fallback automatically.
 
 ## 5. n8n setup, step by step
 
-1. **Import** `workflows/error-handler.json`, then `workflows/support-dual-llm.json`.
+1. **Import** `workflows/error-handler.json`, then `workflows/support-dual-llm.json`,
+   or let GitHub Actions do it (see *Automatic deploys* below).
 2. **Credentials** (names below are picked up automatically):
 
    | Type | Name | Fields | Used by |
@@ -243,6 +244,25 @@ then uses the LIKE fallback automatically.
 
 ---
 
+### Automatic deploys from GitHub
+
+The **Deploy n8n workflows** action (`.github/workflows/deploy-n8n.yml`) runs
+`scripts/deploy-n8n.mjs` whenever `n8n/workflows/` changes on `main`. It
+creates or updates both workflows through the n8n public API, keeps the
+credentials you selected and your ⚙️ CONFIG values, links the error workflow
+and activates both.
+
+1. n8n → **Settings → n8n API → Create an API key** with the scopes
+   `workflow:*` and `credential:list` (the latter lets the script pick the
+   credentials named in the table above on a first deploy).
+2. GitHub → **Settings → Secrets and variables → Actions**: add `N8N_API_URL`
+   (e.g. `https://n8n.example.com`) and `N8N_API_KEY`. Optionally add
+   `N8N_CONFIG_JSON`, e.g.
+   `{"ADMIN_SITE_URL":"https://support-admin.example.com","TURSO_DATABASE_URL":"https://db-org.turso.io","ORACLE_ORDS_BASE_URL":"https://…/ords/support_ro","SLACK_CHANNEL_ID":"C0123456789"}`.
+3. Run it once from **Actions → Deploy n8n workflows → Run workflow**.
+
+---
+
 ## 6. What the console controls
 
 | Console page | Effect in this workflow (within 30 s) |
@@ -265,10 +285,13 @@ Reason codes sent to the console: `low_confidence`, `models_disagree`,
 
 ## 7. Chat widget
 
-`chat-widget/widget.js` works on any static site (GitHub Pages included):
+`chat-widget/widget.js` works on any static site. The **Deploy chat widget to
+GitHub Pages** action publishes it on every change, at
+`https://aryebleich.github.io/N8N/widget.js` (the older
+`https://aryebleich.github.io/N8N/chat-widget/widget.js` keeps working):
 
 ```html
-<script src="https://<user>.github.io/<repo>/n8n/chat-widget/widget.js"
+<script src="https://aryebleich.github.io/N8N/widget.js"
         data-webhook-url="https://your-n8n-host/webhook/support-chat"
         data-site-url="https://support-admin.example.com"
         data-title="Northwind Goods support"

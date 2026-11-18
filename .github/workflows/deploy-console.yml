@@ -1,0 +1,146 @@
+name: Deploy Support Console
+
+# On every push to main (after CI-equivalent checks):
+#   1. Builds the Docker image and pushes it to GitHub Container Registry
+#      (ghcr.io/<owner>/<repo>:latest and :<sha>). Always runs; needs no secrets.
+#   2. Applies Turso migrations             (only if secret TURSO_DATABASE_URL is set).
+#   3. Deploys to Vercel production         (only if secret VERCEL_TOKEN is set).
+#
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   TURSO_DATABASE_URL, TURSO_AUTH_TOKEN           migrations
+#   OWNER_EMAIL, OWNER_PASSWORD                    optional: create the first owner
+#   VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID Vercel deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'n8n/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-console
+  cancel-in-progress: false
+
+jobs:
+  image:
+    name: Docker image → GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=long
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  migrate:
+    name: Turso migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+      OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+      OWNER_PASSWORD: ${{ secrets.OWNER_PASSWORD }}
+    steps:
+      - name: Check configuration
+        id: cfg
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ]; then
+            echo "TURSO_DATABASE_URL secret not set; skipping migrations." >> "$GITHUB_STEP_SUMMARY"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v5
+        if: steps.cfg.outputs.run == 'true'
+
+      - uses: actions/setup-node@v5
+        if: steps.cfg.outputs.run == 'true'
+        with:
+          node-version: 24
+          cache: npm
+
+      - if: steps.cfg.outputs.run == 'true'
+        run: npx -y npm@11.6.2 ci --no-audit --no-fund
+
+      - name: Apply migrations
+        if: steps.cfg.outputs.run == 'true'
+        run: npm run migrate
+
+      - name: Create first owner (skipped if it exists)
+        if: steps.cfg.outputs.run == 'true' && env.OWNER_EMAIL != ''
+        run: npm run seed:owner
+
+  vercel:
+    name: Vercel production
+    needs: migrate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - name: Check configuration
+        id: cfg
+        run: |
+          if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo "Vercel secrets not set; skipping the Vercel deploy." >> "$GITHUB_STEP_SUMMARY"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v5
+        if: steps.cfg.outputs.run == 'true'
+
+      - uses: actions/setup-node@v5
+        if: steps.cfg.outputs.run == 'true'
+        with:
+          node-version: 24
+
+      - name: Pull project settings
+        if: steps.cfg.outputs.run == 'true'
+        run: npx -y vercel@65.11.0 pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+      - name: Build
+        if: steps.cfg.outputs.run == 'true'
+        run: npx -y vercel@65.11.0 build --prod --token="$VERCEL_TOKEN"
+
+      - name: Deploy
+        if: steps.cfg.outputs.run == 'true'
+        run: |
+          url=$(npx -y vercel@65.11.0 deploy --prebuilt --prod --token="$VERCEL_TOKEN")
+          echo "Deployed to $url" >> "$GITHUB_STEP_SUMMARY"

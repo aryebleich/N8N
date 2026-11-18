@@ -3,7 +3,8 @@
  * Vanilla JavaScript, no dependencies, works on any static site (GitHub Pages included).
  *
  * Embed with one tag:
- *   <script src="https://YOUR-SITE/chat-widget/widget.js" defer></script>
+ *   <script src="https://aryebleich.github.io/N8N/widget.js" defer></script>
+ * (GitHub Actions publishes this folder to Pages; /chat-widget/widget.js also works.)
  *
  * Optional attributes on the <script> tag:
  *   data-webhook-url="https://n8n.example.com/webhook/support-chat"   (overrides WEBHOOK_URL)
