@@ -1,14 +1,15 @@
-name: Deploy Support Console
+name: Deploy Admin Panel
 
 # On every push to main (after CI-equivalent checks):
 #   1. Builds the Docker image and pushes it to GitHub Container Registry
 #      (ghcr.io/<owner>/<repo>:latest and :<sha>). Always runs; needs no secrets.
-#   2. Applies Turso migrations             (only if secret TURSO_DATABASE_URL is set).
-#   3. Deploys to Vercel production         (only if secret VERCEL_TOKEN is set).
+#   2. Applies Turso migrations + sample data (only if secret TURSO_DATABASE_URL is set).
+#   3. Deploys to Vercel production           (only if secret VERCEL_TOKEN is set).
+#      The panel has no login: a Vercel deployment answers 403 until you protect it
+#      (Vercel Deployment Protection) and set ADMIN_PUBLIC=true there. See README → Security.
 #
 # Repository secrets (Settings → Secrets and variables → Actions):
 #   TURSO_DATABASE_URL, TURSO_AUTH_TOKEN           migrations
-#   OWNER_EMAIL, OWNER_PASSWORD                    optional: create the first owner
 #   VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID Vercel deploy
 
 on:
@@ -70,8 +71,6 @@ jobs:
     env:
       TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
       TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
-      OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
-      OWNER_PASSWORD: ${{ secrets.OWNER_PASSWORD }}
     steps:
       - name: Check configuration
         id: cfg
@@ -95,13 +94,9 @@ jobs:
       - if: steps.cfg.outputs.run == 'true'
         run: npx -y npm@11.6.2 ci --no-audit --no-fund
 
-      - name: Apply migrations
+      - name: Apply migrations and sample data
         if: steps.cfg.outputs.run == 'true'
         run: npm run migrate
-
-      - name: Create first owner (skipped if it exists)
-        if: steps.cfg.outputs.run == 'true' && env.OWNER_EMAIL != ''
-        run: npm run seed:owner
 
   vercel:
     name: Vercel production

@@ -12,7 +12,7 @@ chat (webhook):
 The **Support Console** at the repository root is the control panel: settings,
 kill switches, thresholds, prompts, FAQ, escalations and integrations are
 managed there and stored in Turso. This workflow reads them (cached 30 s) and
-hands every outcome to the console, which sends email replies, records
+hands every outcome to the admin panel, which sends email replies, records
 everything and posts Slack alerts. See the root [README](../README.md).
 
 ```
@@ -20,7 +20,7 @@ n8n/
 ├── workflows/
 │   ├── support-dual-llm.json   # main workflow (60 nodes incl. 11 sticky notes)
 │   └── error-handler.json      # Error Trigger → Turso system_error escalation + Slack
-├── prompts/                    # default prompt texts (also seeded by the console migrations)
+├── prompts/                    # default prompt texts (also seeded by the admin panel migrations)
 ├── oracle/ords-setup.sql       # read-only user, views, grants, ORDS handlers, OAuth client
 ├── turso/schema.sql, seed-faq.sql
 ├── chat-widget/                # embeddable widget + GitHub Pages demo
@@ -38,7 +38,7 @@ flowchart LR
   IMAP["📥 IMAP trigger"] --> CFG["⚙️ CONFIG → 📝 PROMPTS → 🧭 NORMALIZE"]
   HOOK["💬 Chat webhook"] --> CFG
   CFG --> OR["🏦 ORDS customer lookup (4 s, read-only)"]
-  CFG --> TL["🗄️ Turso: history · FAQ · session token<br/>+ console settings & prompts (cached 30 s)"]
+  CFG --> TL["🗄️ Turso: history · FAQ · session token<br/>+ admin panel settings & prompts (cached 30 s)"]
   OR --> AS["🧩 Assemble + identity check<br/>blocked senders"]
   TL --> AS
   AS -->|verified| ACC["🏦 orders + tickets"] --> CL
@@ -63,7 +63,7 @@ flowchart LR
 - **Identity before account data.** Email: sender address equals the account
   email. Chat: a session token from Turso `session_tokens` whose email and
   customer id match the account. Unverified Oracle data never reaches a model.
-- **Console settings at runtime.** The Turso read for each message also loads
+- **Admin panel settings at runtime.** The Turso read for each message also loads
   `settings` and `prompts` when the 30-second cache in the workflow's static data
   has expired. Console values override ⚙️ CONFIG and 📝 PROMPTS, which remain the
   fallback.
@@ -75,7 +75,7 @@ flowchart LR
 - **Exponential backoff for the model calls** (0.5 s/1 s for chat inside the
   8-second budget, 1/2/4 s for email) via Switch → Wait loops, since n8n's
   native retry is fixed-interval.
-- **Delivery through the console.** The console sends email with real
+- **Delivery through the admin panel.** The admin panel sends email with real
   `In-Reply-To`/`References` threading headers (the native Send Email node
   cannot), stores the decision, applies the SLA and posts the masked Slack alert.
   Its endpoints are idempotent on `requestId`, so the node's 3 retries never
@@ -85,10 +85,10 @@ flowchart LR
 
 - n8n executes the "parallel" Oracle and Turso branches one after another; an
   ORDS outage adds its 4-second timeout to the chat reply time.
-- Chat is answered before the console is called. If the console is down, the
+- Chat is answered before the admin panel is called. If the admin panel is down, the
   customer still gets the answer, but the conversation is not recorded; the
   error workflow logs a `system_error` escalation and alerts Slack.
-- Email replies need the console to be reachable.
+- Email replies need the admin panel to be reachable.
 
 ---
 
@@ -100,8 +100,8 @@ flowchart LR
 | **Support Console** | Deployed and migrated (root README), with `INTERNAL_API_SECRET` set. |
 | **Turso** | Database and token; tables created with `npm run migrate` from the repo root. |
 | **Oracle ADB** | ORDS enabled (default on ADB); ADMIN access to run `oracle/ords-setup.sql`. |
-| **Anthropic / Google AI Studio** | API keys (also saved in the console for its test panel). |
-| **Mailbox** | IMAP access for the support inbox (SMTP is configured in the console). |
+| **Anthropic / Google AI Studio** | API keys (also in the panel's .env for its Test Center). |
+| **Mailbox** | IMAP access for the support inbox (SMTP is set in the panel's .env). |
 
 ---
 
@@ -179,14 +179,13 @@ turso db create support-bot
 turso db show support-bot --url          # → libsql://support-bot-yourorg.turso.io
 turso db tokens create support-bot       # → the Bearer token for n8n
 
-# From the repository root: creates every table (support tables + console tables)
+# From the repository root: creates every table and loads the sample data
 TURSO_DATABASE_URL=libsql://support-bot-yourorg.turso.io TURSO_AUTH_TOKEN=eyJ... npm run migrate
-turso db shell support-bot < n8n/turso/seed-faq.sql     # optional example FAQ
 ```
 
-`turso/schema.sql` is the base schema the console migration `001` contains
-verbatim; the workflow also needs the console's later migrations (settings,
-prompts, extra escalation columns), so use `npm run migrate`.
+`turso/schema.sql` is the base support schema; the panel's migrations add the
+settings, prompts and extra columns the workflow also reads, so use `npm run migrate`
+(or simply start the panel once with that database: it migrates itself).
 
 Use the URL with `https://` in CONFIG (`libsql://` is also accepted and
 converted). Confirm the HTTP endpoint the workflow uses:
@@ -235,12 +234,12 @@ then uses the LIKE fallback automatically.
    | `ORACLE_LOOKUP_TIMEOUT_MS` | `4000` | Hard timeout per ORDS call |
    | `HISTORY_MESSAGE_LIMIT`, `FAQ_RESULT_LIMIT`, `MAX_MESSAGE_CHARS` | `10`, `5`, `4000` | Context sizes |
    | `WEBHOOK_ALLOWED_ORIGINS` | `*` | Origins allowed to use the chat webhook (403 otherwise) |
-   | `CONFIDENCE_THRESHOLD`, `CLAUDE_MODEL`, `CLAUDE_EFFORT`, `CLAUDE_REFUSAL_FALLBACK`, `GEMINI_MODEL`, `MAX_TOKENS`, `LLM_TIMEOUT_MS`, `COMPANY_NAME`, `SUPPORT_SIGNATURE` | see node | **Fallbacks only.** The console's Settings override these at runtime. |
+   | `CONFIDENCE_THRESHOLD`, `CLAUDE_MODEL`, `CLAUDE_EFFORT`, `CLAUDE_REFUSAL_FALLBACK`, `GEMINI_MODEL`, `MAX_TOKENS`, `LLM_TIMEOUT_MS`, `COMPANY_NAME`, `SUPPORT_SIGNATURE` | see node | **Fallbacks only.** The admin panel's Settings override these at runtime. |
 
    In `error-handler.json`'s ⚙️ CONFIG set `TURSO_DATABASE_URL` and `SLACK_CHANNEL_ID`.
 4. **Error workflow:** main workflow → Settings → Error workflow → `Support · Error Handler`.
 5. **Activate** (n8n 2.x: *Publish*) and copy the production chat webhook URL
-   into the widget and into the console's `N8N_CHAT_WEBHOOK_URL`.
+   into the widget and into the admin panel's `N8N_CHAT_WEBHOOK_URL`.
 
 ---
 
@@ -263,22 +262,27 @@ and activates both.
 
 ---
 
-## 6. What the console controls
+## 6. What the admin panel controls
 
-| Console page | Effect in this workflow (within 30 s) |
+The workflow reads the panel's `settings`, `prompts` and `faq` rows from Turso and
+caches them for 30 seconds (`$getWorkflowStaticData('global')`). Setups that should not
+give n8n database credentials can call `GET /api/internal/config` on the panel instead
+(header `X-Internal-Secret`), which returns the same settings, prompts and active answers.
+
+| Admin panel | Effect in this workflow (within 30 s) |
 |---|---|
-| Settings → thresholds | Per-channel threshold used by 🛡️ Policy Guard and the DECISION node |
-| Settings → models, max tokens, timeout | Claude/Gemini model ids, `max_tokens`, email request timeout |
-| Settings → kill switch | Channel off → every message escalates (`kill_switch`); drafts are still produced |
-| Settings → business hours | Outside hours → escalate (`outside_hours`); "holding" mode skips the Slack ping |
-| Settings → blocked senders / keywords | Senders ignored entirely (chat gets 403); keywords force escalation (`blocked_keyword`, high priority) |
-| Settings → company name, support address | Prompts, greetings, loop protection |
-| Prompts | Claude system prompt, Gemini reviewer, holding message, email signature (`{{variables}}`) |
-| Knowledge base | FAQ rows retrieved per message (FTS5, LIKE fallback) |
+| Home → big ON/OFF switch (`assistant_enabled`) | OFF → every message escalates (`kill_switch`) on both channels |
+| Settings → confidence level (per channel) | Threshold used by 🛡️ Policy Guard and the DECISION node |
+| Settings → Advanced (models, max tokens, wait) | Claude/Gemini model ids, `max_tokens`, request timeout |
+| Settings → channels (`auto_reply_email` / `auto_reply_chat`) | Channel off → every message escalates (`kill_switch`); drafts are still produced |
+| Settings → business hours | Outside hours → escalate (`outside_hours`) with the owner's "outside hours" message as the reply; "No Slack alert" mode skips the Slack ping |
+| Settings → blocked senders / words | Senders ignored entirely (chat gets 403); words force escalation (`blocked_keyword`, high priority) |
+| Tone and Rules | Claude instructions (rebuilt from the tone choices), holding message, email signature, chat greeting, company name |
+| Answers (FAQ) | FAQ rows retrieved per message (FTS5, LIKE fallback); "Use this answer" off = not retrieved |
 
-Reason codes sent to the console: `low_confidence`, `models_disagree`,
+Reason codes sent to the panel: `low_confidence`, `models_disagree`,
 `unusual_question`, `parse_error`, `kill_switch`, `outside_hours`,
-`blocked_keyword`, `policy` (identity/privacy checks); the console adds
+`blocked_keyword`, `policy` (identity/privacy checks); the panel adds
 `delivery_failed`, and the error workflow `system_error`.
 
 ---
@@ -299,9 +303,9 @@ GitHub Pages** action publishes it on every change, at
 ```
 
 - `data-webhook-url` (or `WEBHOOK_URL` in the file): the n8n chat webhook.
-- `data-site-url` (or `SITE_URL`): the console. The widget then loads the greeting
+- `data-site-url` (or `SITE_URL`): the admin panel. The widget then loads the greeting
   from **Prompts → Chat greeting** and polls every 15 s for teammates' replies to
-  escalated chats. Add the shop's origin to the console's `WIDGET_ALLOWED_ORIGINS`.
+  escalated chats. Add the shop's origin to the admin panel's `WIDGET_ALLOWED_ORIGINS`.
 - Signed-in customers: your login backend writes a row to Turso `session_tokens`
   and passes the token via `data-session-token`/`data-customer-email` or
   `SupportChat.identify({ token, email, name })`. The widget keeps the token the
@@ -318,10 +322,9 @@ The demo page is `chat-widget/index.html`.
   Never written.
 - **Sent to the models:** message, recent history, FAQ rows, and for verified
   customers the account data above.
-- **Written (by the console):** conversations, messages, AI decisions (with a
-  masked account summary: name, plan, status, last 3 orders), escalations.
-  Retention, CSV export and per-customer deletion are in the console's
-  **Data tools**.
+- **Written (by the admin panel):** conversations, messages, the AI decision for each
+  reply (both model outputs, stored in `messages.meta_json`), escalations, and an
+  append-only audit log of every change.
 
 ---
 
@@ -329,9 +332,9 @@ The demo page is `chat-widget/index.html`.
 
 | Symptom | Fix |
 |---|---|
-| `🌐 Site: Deliver` fails with 401 | The Header Auth value must equal the console's `INTERNAL_API_SECRET`, header name `X-Internal-Secret`. |
+| `🌐 Site: Deliver` fails with 401 | The Header Auth value must equal the admin panel's `INTERNAL_API_SECRET`, header name `X-Internal-Secret`. |
 | `🌐 Site: Deliver` fails with 400 | The response lists the invalid fields (zod). Usually a missing customer email on chat (the widget requires one). |
-| Console settings don't apply | Wait 30 s (cache). The 🧩 Assemble Context output shows `ctx.runtime.source` (`turso`, `cache` or `nodes`); `nodes` means the console tables are missing — run `npm run migrate`. |
+| Admin panel settings don't apply | Wait 30 s (cache). The 🧩 Assemble Context output shows `ctx.runtime.source` (`turso`, `cache` or `nodes`); `nodes` means the admin panel tables are missing — run `npm run migrate`. |
 | Every message escalates with `parse_error` | Open 🤖 Claude: Parse Draft / 🔎 Gemini: Parse Review for the API error (key, model id, `max_tokens`). |
 | `account_lookup = "unavailable"` | ORDS unreachable or 401; check `ORACLE_ORDS_BASE_URL` (ends in `/ords/support_ro`) and the credential. |
 | Turso errors in 🗄️ Turso: Decode Results | 401 → new token; `no such table` → run migrations. |
@@ -343,7 +346,7 @@ The demo page is `chat-widget/index.html`.
 ## Acceptance tests
 
 See [tests/sample-messages.md](tests/sample-messages.md) for the five sample
-messages and tests A–E, and the root README for the console acceptance tests.
+messages and tests A–E, and the root README for the admin panel acceptance tests.
 
 ## License
 

@@ -1,140 +1,119 @@
 import 'server-only';
 import Anthropic from '@anthropic-ai/sdk';
-import { ImapFlow } from 'imapflow';
-import { all, get, run, nowIso } from './db';
-import { getSecret } from './secrets';
+import { env } from './env';
+import { get, run, nowIso } from './db';
 import { getSettings } from './settings';
 import { slackApi } from './slack';
 import { smtpTransport } from './mailer';
-import type { Service } from './validators';
 
-export interface CheckResult {
-  ok: boolean;
-  latencyMs: number;
-  detail: string;
-  error: string | null;
-}
+/**
+ * One status light per service. Keys are only ever read from .env on the server;
+ * this module returns colours and plain sentences, never a key.
+ *  green  = Connected
+ *  yellow = the key is in .env, but the service did not answer
+ *  red    = Not connected (nothing in .env)
+ */
+export type Light = 'green' | 'yellow' | 'red';
+export interface ServiceStatus { id: ServiceId; name: string; what: string; light: Light; label: string; detail: string; envVars: string[] }
+export type ServiceId = 'database' | 'anthropic' | 'google' | 'slack' | 'oracle' | 'email' | 'n8n';
 
-export interface StatusRow {
-  service: Service;
-  last_success_at: string | null;
-  last_latency_ms: number | null;
-  last_error: string | null;
-  last_error_at: string | null;
-  last_checked_at: string | null;
-}
-
-export const SERVICE_LABELS: Record<Service, string> = {
-  turso: 'Turso',
-  oracle: 'Oracle ORDS',
-  anthropic: 'Anthropic',
-  google: 'Google AI Studio',
-  slack: 'Slack',
-  imap: 'IMAP',
-  smtp: 'SMTP',
+const INFO: Record<ServiceId, { name: string; what: string; envVars: string[] }> = {
+  database: { name: 'Database', what: 'Stores your answers, settings and conversations.', envVars: ['TURSO_DATABASE_URL', 'TURSO_AUTH_TOKEN'] },
+  anthropic: { name: 'Claude (Anthropic)', what: 'Writes the answers.', envVars: ['ANTHROPIC_API_KEY'] },
+  google: { name: 'Gemini (Google AI Studio)', what: 'Double-checks every answer.', envVars: ['GOOGLE_AI_API_KEY'] },
+  slack: { name: 'Slack', what: 'Tells your team when a person is needed.', envVars: ['SLACK_BOT_TOKEN'] },
+  oracle: { name: 'Oracle (customer accounts)', what: 'Lets the assistant look up orders, read-only.', envVars: ['ORACLE_ORDS_URL', 'ORACLE_ORDS_USER', 'ORACLE_ORDS_PASSWORD'] },
+  email: { name: 'Email sending', what: 'Sends email replies to customers.', envVars: ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD'] },
+  n8n: { name: 'n8n workflow', what: 'Reads your inbox and chat and runs the assistant.', envVars: ['INTERNAL_API_SECRET'] },
 };
 
-/** Records the outcome of any call to a service (tests and real traffic). */
-export async function recordStatus(service: Service, ok: boolean, latencyMs: number, error: string | null) {
-  const now = nowIso();
-  await run(
-    `INSERT INTO integration_status (service, last_success_at, last_latency_ms, last_error, last_error_at, last_checked_at)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(service) DO UPDATE SET
-       last_success_at = COALESCE(excluded.last_success_at, integration_status.last_success_at),
-       last_latency_ms = excluded.last_latency_ms,
-       last_error      = CASE WHEN excluded.last_error IS NULL THEN integration_status.last_error ELSE excluded.last_error END,
-       last_error_at   = CASE WHEN excluded.last_error IS NULL THEN integration_status.last_error_at ELSE excluded.last_error_at END,
-       last_checked_at = excluded.last_checked_at`,
-    [service, ok ? now : null, latencyMs, ok ? null : (error || 'failed').slice(0, 500), ok ? null : now, now],
-  );
-}
+const redact = (m: string) => m.replace(/(sk-ant-|xoxb-|AIza)[\w-]+/g, '$1…').slice(0, 300);
 
-export async function listStatus(): Promise<StatusRow[]> {
-  return all<StatusRow>('SELECT * FROM integration_status');
-}
-
-async function timed(fn: () => Promise<string>): Promise<CheckResult> {
-  const started = Date.now();
-  try {
-    const detail = await fn();
-    return { ok: true, latencyMs: Date.now() - started, detail, error: null };
-  } catch (e) {
-    const msg = (e as Error).message || String(e);
-    // Never echo secrets that libraries sometimes include in error text.
-    return { ok: false, latencyMs: Date.now() - started, detail: '', error: msg.replace(/(sk-ant-|xoxb-|AIza)[\w-]+/g, '$1…').slice(0, 500) };
+async function check(id: ServiceId): Promise<{ light: Light; detail: string }> {
+  const e = env();
+  const s = await getSettings();
+  const ok = (detail: string) => ({ light: 'green' as Light, detail });
+  const missing = (detail: string) => ({ light: 'red' as Light, detail });
+  switch (id) {
+    case 'database': {
+      const r = await get<{ n: number }>('SELECT count(*) AS n FROM faq');
+      return ok(`${r?.n ?? 0} answers stored${e.TURSO_DATABASE_URL.startsWith('file:') ? ' in a local file' : ' in Turso'}.`);
+    }
+    case 'anthropic': {
+      if (!e.ANTHROPIC_API_KEY) return missing('Add ANTHROPIC_API_KEY to .env. Until then the Test Center uses the offline simulator.');
+      const m = await new Anthropic({ apiKey: e.ANTHROPIC_API_KEY, timeout: 8000, maxRetries: 0 }).models.retrieve(s.claude_model);
+      return ok(`Model ${m.id} is ready.`);
+    }
+    case 'google': {
+      if (!e.GOOGLE_AI_API_KEY) return missing('Add GOOGLE_AI_API_KEY to .env. Until then the Test Center uses the offline simulator.');
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(s.gemini_model)}`, { headers: { 'x-goog-api-key': e.GOOGLE_AI_API_KEY }, signal: AbortSignal.timeout(8000) });
+      if (!res.ok) throw new Error(`Google answered HTTP ${res.status}. Check the key and the model name.`);
+      return ok(`Model ${s.gemini_model} is ready.`);
+    }
+    case 'slack': {
+      if (!e.SLACK_BOT_TOKEN) return missing('Add SLACK_BOT_TOKEN to .env to get alerts in Slack.');
+      const d = await slackApi('auth.test', {});
+      return ok(`Signed in to ${String(d.team)}${s.slack_channel ? `, posting to ${s.slack_channel}` : '. Pick a channel under Settings.'}`);
+    }
+    case 'oracle': {
+      if (!e.ORACLE_ORDS_URL || !e.ORACLE_ORDS_PASSWORD) return missing('Optional. Add ORACLE_ORDS_URL and ORACLE_ORDS_PASSWORD to .env so the assistant can look up orders.');
+      const res = await fetch(`${e.ORACLE_ORDS_URL.replace(/\/+$/, '')}/support/health`, {
+        headers: { Authorization: `Basic ${Buffer.from(`${e.ORACLE_ORDS_USER}:${e.ORACLE_ORDS_PASSWORD}`).toString('base64')}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) throw new Error(`Oracle answered HTTP ${res.status}.`);
+      return ok('Read-only connection works.');
+    }
+    case 'email': {
+      if (!e.SMTP_HOST || !e.SMTP_USER || !e.SMTP_PASSWORD) return missing('Add SMTP_HOST, SMTP_USER and SMTP_PASSWORD to .env to send email replies.');
+      const { transport } = await smtpTransport();
+      await transport.verify();
+      transport.close();
+      return ok(`Signed in to ${e.SMTP_HOST}.`);
+    }
+    case 'n8n': {
+      if (!e.INTERNAL_API_SECRET) return missing('Add INTERNAL_API_SECRET to .env (and the same value in n8n) so the workflow can talk to this panel.');
+      const seen = await lastN8nContact();
+      if (!seen) return { light: 'yellow', detail: 'Ready, but n8n has not contacted this panel yet.' };
+      const mins = Math.round((Date.now() - new Date(seen).getTime()) / 60000);
+      return mins > 60 * 24 ? { light: 'yellow', detail: `Last heard from n8n ${Math.round(mins / 60)} hours ago.` } : ok(`Last heard from n8n ${mins < 1 ? 'just now' : `${mins} min ago`}.`);
+    }
   }
 }
 
-const CHECKS: Record<Service, () => Promise<string>> = {
-  async turso() {
-    const r = await get<{ n: number }>('SELECT count(*) AS n FROM faq');
-    return `Connected. ${r?.n ?? 0} FAQ rows.`;
-  },
-  async oracle() {
-    const s = await getSettings();
-    if (!s.integration_oracle.base_url) throw new Error('ORDS base URL is not set.');
-    const password = await getSecret('oracle_ords_password');
-    if (!password) throw new Error('ORDS password is missing.');
-    // Read-only: GET on the health handler of the SUPPORT_RO module.
-    const res = await fetch(`${s.integration_oracle.base_url.replace(/\/+$/, '')}/support/health`, {
-      method: 'GET',
-      headers: { Authorization: `Basic ${Buffer.from(`${s.integration_oracle.user}:${password}`).toString('base64')}` },
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!res.ok) throw new Error(`ORDS answered HTTP ${res.status}`);
-    return 'GET /support/health returned 200.';
-  },
-  async anthropic() {
-    const s = await getSettings();
-    const apiKey = await getSecret('anthropic_api_key');
-    if (!apiKey) throw new Error('Anthropic API key is missing.');
-    const client = new Anthropic({ apiKey, timeout: 10_000, maxRetries: 0 });
-    const m = await client.models.retrieve(s.claude_model);
-    return `Key works. Model ${m.id} is available.`;
-  },
-  async google() {
-    const s = await getSettings();
-    const apiKey = await getSecret('google_ai_api_key');
-    if (!apiKey) throw new Error('Google AI Studio key is missing.');
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(s.gemini_model)}`, {
-      headers: { 'x-goog-api-key': apiKey },
-      signal: AbortSignal.timeout(10_000),
-    });
-    const data = (await res.json().catch(() => ({}))) as { name?: string; error?: { message?: string } };
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${data.error?.message || res.statusText}`);
-    return `Key works. ${data.name || s.gemini_model} is available.`;
-  },
-  async slack() {
-    const data = await slackApi('auth.test', {});
-    return `Signed in as ${String(data.user)} in ${String(data.team)}.`;
-  },
-  async imap() {
-    const s = await getSettings();
-    const cfg = s.integration_imap;
-    if (!cfg.host || !cfg.user) throw new Error('IMAP host and user are not set.');
-    const pass = await getSecret('imap_password');
-    if (!pass) throw new Error('IMAP password is missing.');
-    const client = new ImapFlow({ host: cfg.host, port: cfg.port, secure: cfg.secure, auth: { user: cfg.user, pass }, logger: false, connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 15_000 });
-    await client.connect();
-    try {
-      const status = await client.status('INBOX', { messages: true, unseen: true });
-      if (!status) return 'Signed in. INBOX status unavailable.';
-      return `Signed in. INBOX has ${status.messages ?? 0} messages, ${status.unseen ?? 0} unread.`;
-    } finally {
-      await client.logout().catch(() => undefined);
-    }
-  },
-  async smtp() {
-    const { transport } = await smtpTransport();
-    await transport.verify();
-    transport.close();
-    return 'SMTP server accepted the login.';
-  },
-};
+let cache: { at: number; value: ServiceStatus[] } | null = null;
 
-export async function testService(service: Service): Promise<CheckResult> {
-  const result = await timed(CHECKS[service]);
-  await recordStatus(service, result.ok, result.latencyMs, result.error);
-  return result;
+export async function serviceStatus(fresh = false): Promise<ServiceStatus[]> {
+  if (!fresh && cache && Date.now() - cache.at < 60_000) return cache.value;
+  const ids = Object.keys(INFO) as ServiceId[];
+  const value = await Promise.all(
+    ids.map(async (id) => {
+      let r: { light: Light; detail: string };
+      try {
+        r = await check(id);
+      } catch (err) {
+        r = { light: 'yellow', detail: `The key is in .env, but the service did not answer: ${redact((err as Error).message || String(err))}` };
+      }
+      const label = r.light === 'green' ? 'Connected' : r.light === 'yellow' ? 'Check needed' : 'Not connected';
+      return { id, ...INFO[id], ...r, label };
+    }),
+  );
+  cache = { at: Date.now(), value };
+  return value;
+}
+
+const N8N_SEEN_KEY = 'n8n_last_seen';
+let lastWrite = 0;
+/** Called by the internal endpoints. Written at most once a minute. */
+export async function markN8nSeen() {
+  if (Date.now() - lastWrite < 60_000) return;
+  lastWrite = Date.now();
+  await run(
+    'INSERT INTO settings (key, value_json, updated_at, updated_by) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at',
+    [N8N_SEEN_KEY, JSON.stringify(nowIso()), nowIso(), 'n8n'],
+  ).catch(() => undefined);
+}
+async function lastN8nContact(): Promise<string | null> {
+  const r = await get<{ value_json: string }>('SELECT value_json FROM settings WHERE key = ?', [N8N_SEEN_KEY]);
+  try { return r ? JSON.parse(r.value_json) : null; } catch { return null; }
 }

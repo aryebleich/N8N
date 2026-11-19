@@ -1,10 +1,13 @@
-import { route } from '@/lib/api';
-import { promptIdSchema, promptRestoreSchema } from '@/lib/validators';
+import { adminRoute, HttpError } from '@/lib/api';
 import { restorePrompt } from '@/lib/prompts';
+import { updateSettings } from '@/lib/settings';
+import { promptIdSchema, promptRestoreSchema } from '@/lib/validators';
 
-export const runtime = 'nodejs';
-
-export const POST = route({ role: 'owner', schema: promptRestoreSchema }, async ({ body, params, actor }) => {
-  const id = promptIdSchema.parse((params as { id: string }).id);
-  return { ok: true, ...(await restorePrompt(id, body.version, actor)) };
+/** One-click restore of an earlier version (saved as a new version, so nothing is lost). */
+export const POST = adminRoute<typeof promptRestoreSchema._output, { id: string }>(promptRestoreSchema, async ({ params, body, actor }) => {
+  const id = promptIdSchema.safeParse(params.id);
+  if (!id.success) throw new HttpError(404, 'That text does not exist.');
+  const r = await restorePrompt(id.data, body.version, actor);
+  if (id.data === 'claude_system') await updateSettings({ prompt_mode: 'custom' }, actor);
+  return { ok: true, ...r };
 });

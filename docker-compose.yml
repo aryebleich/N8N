@@ -1,25 +1,22 @@
-# Admin console for the n8n dual-LLM support workflow.
-#   cp .env.example .env    # fill it in
+# Support assistant admin panel.
+#   cp .env.example .env      # add your keys (optional at first)
 #   docker compose up -d --build
-# The `migrate` service applies migrations and creates the first owner, then exits.
-# The database is Turso (TURSO_DATABASE_URL), shared with the n8n workflow.
+#   open http://localhost:3000
+#
+# There is NO login. The port is published on 127.0.0.1 only, so the panel opens on this
+# computer and nowhere else. Read "Security" in README.md before changing that.
+# Tables and sample data are created automatically on first start (no migrate step).
 
 services:
-  migrate:
-    build: { context: ., target: tools }
-    env_file: .env
-    restart: "no"
-
   app:
     build: { context: ., target: runner }
     env_file: .env
     environment:
       NODE_ENV: production
     ports:
-      - "3000:3000"
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - panel-data:/app/data    # the local database file (unused if TURSO_DATABASE_URL points to Turso)
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -27,18 +24,5 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # Runs the retention job once a day (no-op when retention is off).
-  cron:
-    image: curlimages/curl:8.11.1
-    env_file: .env
-    depends_on:
-      app:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        while true; do
-          curl -fsS -H "Authorization: Bearer $${CRON_SECRET}" http://app:3000/api/cron/retention || echo "retention run failed"
-          sleep 86400
-        done
-    restart: unless-stopped
+volumes:
+  panel-data:

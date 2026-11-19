@@ -6,7 +6,7 @@ export function NativeSelect({ className, ...props }: React.ComponentProps<'sele
   return (
     <select
       data-slot="select"
-      className={cn('h-9 w-full rounded-md border border-input bg-card px-2.5 text-sm shadow-xs disabled:cursor-not-allowed disabled:opacity-50', className)}
+      className={cn('h-11 w-full rounded-md border border-input bg-card px-2.5 text-base shadow-xs disabled:cursor-not-allowed disabled:opacity-50', className)}
       {...props}
     />
   );

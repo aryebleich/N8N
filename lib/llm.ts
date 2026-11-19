@@ -1,11 +1,11 @@
 import 'server-only';
 import Anthropic from '@anthropic-ai/sdk';
-import { getSecret } from './secrets';
+import { env } from './env';
 import { renderTemplate } from './prompt-template';
 import type { Settings } from './settings-schema';
 
 /**
- * Prompt test runner. Builds the same requests as the n8n workflow
+ * Test Center runner. Builds the same requests as the n8n workflow
  * ("🤖 Claude: Build Request" and "🔎 Gemini: Build Request") and parses the
  * same strict JSON. Nothing is sent to customers and nothing is stored.
  */
@@ -111,8 +111,8 @@ function parseGemini(text: string): GeminiOutput {
 export async function runClaude(input: TestInput, settings: Settings): Promise<ModelRun<ClaudeOutput>> {
   const started = Date.now();
   const model = settings.claude_model;
-  const apiKey = await getSecret('anthropic_api_key');
-  if (!apiKey) return { ok: false, parsed: null, raw: '', error: 'Anthropic API key is missing. Add it under Integrations.', latencyMs: 0, model };
+  const apiKey = env().ANTHROPIC_API_KEY;
+  if (!apiKey) return { ok: false, parsed: null, raw: '', error: 'ANTHROPIC_API_KEY is not in the .env file.', latencyMs: 0, model };
   const client = new Anthropic({ apiKey, timeout: settings.request_timeout_ms, maxRetries: 2 });
   try {
     const res = await client.beta.messages.create({
@@ -126,7 +126,7 @@ export async function runClaude(input: TestInput, settings: Settings): Promise<M
     });
     const raw = res.content.map((b) => (b.type === 'text' ? b.text : '')).join('').trim();
     if (res.stop_reason === 'refusal') return { ok: false, parsed: null, raw, error: 'Claude declined this request (refusal).', latencyMs: Date.now() - started, model: res.model, stopReason: res.stop_reason };
-    if (res.stop_reason === 'max_tokens') return { ok: false, parsed: null, raw, error: 'Claude hit MAX_TOKENS before finishing the JSON. Raise max tokens in Settings.', latencyMs: Date.now() - started, model: res.model, stopReason: res.stop_reason };
+    if (res.stop_reason === 'max_tokens') return { ok: false, parsed: null, raw, error: 'Claude hit MAX_TOKENS before finishing the JSON. Raise max_tokens.', latencyMs: Date.now() - started, model: res.model, stopReason: res.stop_reason };
     try {
       return { ok: true, parsed: parseClaude(raw), raw, error: null, latencyMs: Date.now() - started, model: res.model, stopReason: res.stop_reason };
     } catch (e) {
@@ -141,8 +141,8 @@ export async function runClaude(input: TestInput, settings: Settings): Promise<M
 export async function runGemini(input: TestInput, draft: ClaudeOutput | null, settings: Settings): Promise<ModelRun<GeminiOutput>> {
   const started = Date.now();
   const model = settings.gemini_model;
-  const apiKey = await getSecret('google_ai_api_key');
-  if (!apiKey) return { ok: false, parsed: null, raw: '', error: 'Google AI Studio key is missing. Add it under Integrations.', latencyMs: 0, model };
+  const apiKey = env().GOOGLE_AI_API_KEY;
+  if (!apiKey) return { ok: false, parsed: null, raw: '', error: 'GOOGLE_AI_API_KEY is not in the .env file.', latencyMs: 0, model };
   const userText = [
     'KNOWLEDGE_BASE:', '<knowledge_base>', input.faqContext, '</knowledge_base>', '',
     'CUSTOMER_CONTEXT:', '<customer_context>', CUSTOMER_CONTEXT, '</customer_context>', '',
@@ -189,19 +189,4 @@ export async function runGemini(input: TestInput, draft: ClaudeOutput | null, se
   } catch (e) {
     return { ok: false, parsed: null, raw: '', error: `Google AI Studio unreachable: ${(e as Error).message}`, latencyMs: Date.now() - started, model };
   }
-}
-
-/** Mirrors the workflow's decision gate so the test panel can say "would auto-send". */
-export function wouldAutoSend(claude: ModelRun<ClaudeOutput>, gemini: ModelRun<GeminiOutput>, threshold: number) {
-  const reasons: string[] = [];
-  if (!claude.ok || !claude.parsed) reasons.push('Claude output unusable');
-  if (!gemini.ok || !gemini.parsed) reasons.push('Gemini output unusable');
-  const c = claude.parsed;
-  const g = gemini.parsed;
-  if (c && c.confidence < threshold) reasons.push(`Claude confidence ${c.confidence.toFixed(2)} < ${threshold}`);
-  if (g && g.confidence < threshold) reasons.push(`Gemini confidence ${g.confidence.toFixed(2)} < ${threshold}`);
-  if (g && !g.agrees) reasons.push('Gemini does not agree');
-  if (c?.needs_human) reasons.push('Claude asked for a human');
-  if (g?.needs_human) reasons.push('Gemini asked for a human');
-  return { autoSend: reasons.length === 0, reasons };
 }

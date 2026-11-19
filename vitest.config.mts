@@ -9,10 +9,9 @@ export default defineConfig({
   test: {
     include: ['tests/unit/**/*.test.ts'],
     environment: 'node',
+    fileParallelism: false,
     env: {
-      ENCRYPTION_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=',
       TURSO_DATABASE_URL: 'file::memory:',
-      SESSION_SECRET: 'test-session-secret-test-session-secret',
       INTERNAL_API_SECRET: 'test-internal-secret-0123456789abcdef',
       APP_URL: 'http://localhost:3000',
     },

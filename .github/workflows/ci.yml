@@ -38,15 +38,13 @@ jobs:
       - name: Build
         env:
           TURSO_DATABASE_URL: file:/tmp/ci-build.db
-          ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
-          INTERNAL_API_SECRET: ci-build-secret-0123456789abcdef
           NEXT_TELEMETRY_DISABLED: '1'
         run: npm run build
 
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 
-      - name: End-to-end smoke tests
+      - name: End-to-end owner checklist
         run: npm run test:e2e
 
       - name: Validate n8n workflow JSON

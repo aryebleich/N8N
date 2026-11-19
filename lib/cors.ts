@@ -1,7 +1,7 @@
 import 'server-only';
 import { env } from './env';
 
-/** CORS for the public widget endpoints only. Origins come from WIDGET_ALLOWED_ORIGINS. */
+/** CORS for the two public widget endpoints only. Origins come from WIDGET_ALLOWED_ORIGINS. */
 export function corsHeaders(origin: string | null): Record<string, string> {
   const allowed = env().WIDGET_ALLOWED_ORIGINS.split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean);
   const ok = origin && (allowed.includes('*') || allowed.includes(origin.replace(/\/$/, '')));

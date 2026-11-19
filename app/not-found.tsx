@@ -1,13 +1,12 @@
 import Link from 'next/link';
+import { Button } from '@/components/ui/button';
 
 export default function NotFound() {
   return (
-    <main className="grid min-h-dvh place-items-center px-4">
-      <div className="text-center">
-        <h1 className="text-2xl font-semibold">Not found</h1>
-        <p className="mt-2 text-muted-foreground">That page or record does not exist, or it was deleted.</p>
-        <Link href="/" className="mt-4 inline-block text-primary underline">Back to the dashboard</Link>
-      </div>
-    </main>
+    <div className="py-16 text-center">
+      <h1 className="text-2xl font-bold">This page does not exist</h1>
+      <p className="mt-2 text-muted-foreground">It may have been removed, or the link is wrong.</p>
+      <Button asChild className="mt-6"><Link href="/">Go to Home</Link></Button>
+    </div>
   );
 }

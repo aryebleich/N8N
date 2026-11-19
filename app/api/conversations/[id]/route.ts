@@ -1,33 +1,17 @@
-import { route, ApiError } from '@/lib/api';
-import { conversationActionSchema } from '@/lib/validators';
-import { addNote, assignConversation, latestDraft, sendHumanReply, setConversationStatus } from '@/lib/conversations';
+import { adminRoute } from '@/lib/api';
+import { getConversation, sendHumanReply, setDone } from '@/lib/conversations';
 import { decodeParam } from '@/lib/params';
+import { conversationActionSchema } from '@/lib/validators';
 
-export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const maxDuration = 30;
 
-export const POST = route({ role: 'agent', schema: conversationActionSchema }, async ({ body, params, actor }) => {
-  const id = decodeParam((params as { id: string }).id);
-  switch (body.action) {
-    case 'send': {
-      let text = body.body;
-      if (body.source === 'draft') {
-        const draft = await latestDraft(id);
-        if (!draft) throw new ApiError(400, 'There is no Claude draft to approve for this conversation.');
-        text = draft;
-      }
-      return { ok: true, ...(await sendHumanReply(id, text, body.source, actor)) };
-    }
-    case 'resolve':
-      await setConversationStatus(id, 'resolved', actor);
-      return { ok: true };
-    case 'reopen':
-      await setConversationStatus(id, 'open', actor);
-      return { ok: true };
-    case 'note':
-      await addNote(id, body.body, actor);
-      return { ok: true };
-    case 'assign':
-      await assignConversation(id, body.userId, actor);
-      return { ok: true };
-  }
+export const GET = adminRoute<undefined, { id: string }>(null, async ({ params }) => ({ conversation: await getConversation(decodeParam(params.id)) }));
+
+/** send = "Send this answer" / "Edit then send" / "Write my own reply"; done = "Mark as done"; reopen. */
+export const POST = adminRoute<typeof conversationActionSchema._output, { id: string }>(conversationActionSchema, async ({ params, body, actor }) => {
+  const id = decodeParam(params.id);
+  if (body.action === 'send') return { ok: true, ...(await sendHumanReply(id, body.body, body.source, actor)) };
+  await setDone(id, body.action === 'done', actor);
+  return { ok: true };
 });
