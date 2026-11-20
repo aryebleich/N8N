@@ -1,5 +1,6 @@
 import 'server-only';
 import { z } from 'zod';
+import { normalizeDbUrl } from './db-url';
 
 /**
  * Every server-side setting comes from the environment (.env). Nothing here is ever
@@ -12,8 +13,8 @@ const schema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   ADMIN_PUBLIC: z.enum(['true', 'false']).default('false'),
   APP_URL: z.string().default('http://localhost:3000'),
-  TURSO_DATABASE_URL: z.string().min(1).default('file:./data/support.db'),
-  TURSO_AUTH_TOKEN: optional,
+  TURSO_DATABASE_URL: z.string().optional().transform((v) => normalizeDbUrl(v)),
+  TURSO_AUTH_TOKEN: z.string().optional().transform((v) => (v ? v.trim().replace(/^(['"])(.*)\1$/, '$2').replace(/^Bearer\s+/i, '') : undefined) || undefined),
   INTERNAL_API_SECRET: optional,
   ANTHROPIC_API_KEY: optional,
   GOOGLE_AI_API_KEY: optional,

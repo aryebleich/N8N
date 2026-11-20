@@ -112,3 +112,15 @@ describe('offline simulator', () => {
     expect(simulateGemini(none.parsed).parsed!.agrees).toBe(false);
   });
 });
+
+describe('database address clean-up', async () => {
+  const { normalizeDbUrl } = await import('@/lib/db-url');
+  it('accepts hand-pasted addresses', () => {
+    expect(normalizeDbUrl('  "libsql://db-org.turso.io"\n')).toBe('libsql://db-org.turso.io');
+    expect(normalizeDbUrl('db-org.turso.io')).toBe('libsql://db-org.turso.io');
+    expect(normalizeDbUrl('https://db-org.turso.io/')).toBe('https://db-org.turso.io');
+    expect(normalizeDbUrl('TURSO_DATABASE_URL=libsql://x.turso.io')).toBe('libsql://x.turso.io');
+    expect(normalizeDbUrl('')).toBe('file:./data/support.db');
+    expect(normalizeDbUrl('file:./data/support.db')).toBe('file:./data/support.db');
+  });
+});
